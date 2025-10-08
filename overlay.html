@@ -1,0 +1,365 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>AoE4 Overlay — No Install</title>
+<style>
+  :root{
+    --bg:rgba(40,40,48,.85);
+    --sep:rgba(255,255,255,.12);
+    --fs:13px;
+    --w:1120px;
+    --solo:rgba(68,108,200,.18);
+    --soloHdr:rgba(68,108,200,.28);
+    --team:rgba(60,160,100,.18);
+    --teamHdr:rgba(60,160,100,.28);
+  }
+  html,body{margin:0;height:100%;background:transparent;color:#eee;font:var(--fs)/1.25 system-ui,Segoe UI,Arial,sans-serif;overflow:hidden}
+  .wrap{position:absolute;inset:0;display:grid;place-items:start end}
+  #status{position:absolute;top:4px;right:8px;font-size:11px;opacity:.8}
+
+  .panel{
+    width: calc(var(--w) - 2px);
+    max-width: calc(100% - 2px);
+    height:100%;
+    border:1px solid var(--sep);
+    border-radius:10px;
+    background: rgba(255,255,255,.04);
+    padding:8px;
+    overflow:auto;
+  }
+
+  .groupRow, .hdr, .row{
+    display:grid;
+    grid-template-columns: 1.6fr 1fr .9fr .8fr 1.1fr 1fr .8fr 1.1fr;
+    gap:0;
+  }
+
+  .row{
+    background:var(--bg);
+    margin-top:4px;
+    border:1px solid var(--sep);
+    border-radius:8px
+  }
+  .row>div{padding:4px;border-right:1px solid var(--sep);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row>div:last-child{border-right:none}
+  .name{font-weight:800}
+  .ally .name{color:#4da3ff}
+  .enemy .name{color:#ff6666}
+
+  .hdr{
+    position:sticky; top:0; z-index:1;
+    border:1px solid var(--sep);
+    border-radius:8px;
+    overflow:hidden;
+    background:rgba(0,0,0,.38)
+  }
+  .hdr span{font-weight:800;color:#ddd;padding:4px;border-right:1px solid var(--sep)}
+  .hdr span:last-child{border-right:none}
+
+  /* Solo vs Team tinting */
+  .row > div:nth-child(3),
+  .row > div:nth-child(4),
+  .row > div:nth-child(5){ background: var(--solo); }
+
+  .row > div:nth-child(6),
+  .row > div:nth-child(7),
+  .row > div:nth-child(8){ background: var(--team); }
+
+  .hdr span:nth-child(3),
+  .hdr span:nth-child(4),
+  .hdr span:nth-child(5){ background: var(--soloHdr); }
+
+  .hdr span:nth-child(6),
+  .hdr span:nth-child(7),
+  .hdr span:nth-child(8){ background: var(--teamHdr); }
+
+  .separator{margin-top:8px;color:#bbb;font-weight:700;opacity:.9;display:grid;grid-template-columns:1fr}
+  .separator div{padding:4px}
+
+  /* setup modal */
+  .setup{position:absolute;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center}
+  .box{background:#1f2430;border:1px solid var(--sep);border-radius:12px;max-width:520px;width:90%;padding:14px}
+  .box h3{margin:0 0 8px 0}
+  .box label{display:block;margin:8px 0 4px}
+  .box input{width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#ddd}
+  .box button{margin-top:10px;padding:8px 12px;border:1px solid #555;background:#111;color:#eee;border-radius:8px;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="status">loading…</div>
+  <div class="panel">
+    <div class="hdr">
+      <span>Name</span><span>Country</span>
+      <span>Solo Elo</span><span>Solo WR</span><span>Solo Rank</span>
+      <span>Team Elo</span><span>Team WR</span><span>Team Rank</span>
+    </div>
+    <div id="rows"></div>
+  </div>
+</div>
+
+<!-- First-run setup -->
+<div id="setup" class="setup" style="display:none">
+  <div class="box">
+    <h3>Set your AoE4 profile (one-time)</h3>
+    <p>Paste <b>one</b> of the following: <br>• AoE4World player URL (e.g. https://aoe4world.com/players/123456-name)<br>• SteamID64 (17 digits)<br>• Steam profile URL</p>
+    <label>Profile / Steam link / ID</label>
+    <input id="inputId" placeholder="https://aoe4world.com/players/123456-nabil or 76561198…">
+    <button id="saveBtn">Save</button>
+    <p id="err" style="color:#f99;display:none;margin-top:6px"></p>
+  </div>
+</div>
+
+<script>
+const url = new URL(location.href);
+const pollMs = Math.max(1000, +(url.searchParams.get('poll') || 2000));
+const statusEl = document.getElementById('status');
+const rowsEl   = document.getElementById('rows');
+const setupEl  = document.getElementById('setup');
+const storageKey = "aoe4_profile_id";
+
+// accept pid from ?pid=... or #pid=...
+function getForcedPid(){
+  const q = url.searchParams.get('pid');
+  if (q && /^\d+$/.test(q)) return q;
+  const hash = location.hash && location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
+  const hp = (new URLSearchParams(hash)).get('pid');
+  if (hp && /^\d+$/.test(hp)) return hp;
+  return null;
+}
+const forcedPid = getForcedPid();
+if (forcedPid) localStorage.setItem(storageKey, forcedPid);
+
+function countryFull(code){
+  const m={"US":"United States","GB":"United Kingdom","AU":"Australia","CA":"Canada","CN":"China","JP":"Japan","KR":"South Korea","RU":"Russia","DE":"Germany","FR":"France","IN":"India","BR":"Brazil","SE":"Sweden","FI":"Finland","NO":"Norway","DK":"Denmark","NL":"Netherlands","PL":"Poland","TR":"Türkiye","ES":"Spain","IT":"Italy","MX":"Mexico","ID":"Indonesia","MY":"Malaysia","PH":"Philippines","SG":"Singapore","TH":"Thailand","TW":"Taiwan","VN":"Vietnam","AR":"Argentina","CL":"Chile","CO":"Colombia","SA":"Saudi Arabia","AE":"United Arab Emirates","EG":"Egypt","ZA":"South Africa","NZ":"New Zealand","BD":"Bangladesh","PK":"Pakistan","IR":"Iran","IQ":"Iraq","IE":"Ireland"};
+  return code ? (m[code.toUpperCase()] || code) : "";
+}
+function _wr(m){ if(!m||typeof m!=='object') return [0,null]; const rating=m.rating||0; const wins=m.wins_count??m.wins??0; const losses=m.losses_count??m.losses??0; const games=m.games_count??m.games??(wins+losses); return [rating, games?Math.round(100*wins/games):null]; }
+function _rankFromMode(m){
+  if(!m||typeof m!=='object') return null;
+  for(const k of ["rank_level","rankName","league_name","leagueName","league_text"]){ const v=m[k]; if(typeof v==='string'&&v.trim()) return v.trim(); }
+  if (m.league && typeof m.league==='object'){ const name=m.league.name||m.league.text; const div=m.league.division||m.league.tier; if (name) return div?`${name} ${div}`:name; }
+  const league_id=m.league_id??m.leagueId??m.leagueTier; const division=m.division??m.tier??m.subtier;
+  if (Number.isInteger(league_id)) { const names={0:"Unranked",1:"Bronze",2:"Silver",3:"Gold",4:"Platinum",5:"Diamond",6:"Conqueror"}; const base=names[league_id]; if(base){ if(Number.isInteger(division)&&division>=1&&division<=3){const roman={1:"I",2:"II",3:"III"}[division]; return `${base} ${roman}`;} return base; } }
+  return null;
+}
+function ratingsAndRanks(modes){
+  const m1=(modes||{}).qm_1v1 || (modes||{}).rm_1v1 || {};
+  let mt=(modes||{}).rm_team || {};
+  if (!Object.keys(mt).length){
+    let best=null; for(const k of ["qm_2v2","qm_3v3","qm_4v4","rm_2v2","rm_3v3","rm_4v4"]){ const cand=(modes||{})[k]||{}; if(!best || (cand.rating||0)>(best.rating||0)) best=cand; } mt=best||{};
+  }
+  const [s_rating,s_wr]=_wr(m1); const [t_rating,t_wr]=_wr(mt);
+  const s_rank=_rankFromMode(m1) || "unranked"; const t_rank=_rankFromMode(mt) || "unranked";
+  return {s_rating,s_wr,s_rank,t_rating,t_wr,t_rank};
+}
+
+// include pid so we can merge ranks later
+function simplify(raw, myPid){
+  const out=[]; let myTeam=null;
+  (raw.teams||[]).forEach((team, idx)=>{
+    const t=idx+1;
+    team.forEach(p=>{
+      const pid=String(p.profile_id||p.id||"");
+      if (myPid && pid===String(myPid)) myTeam=t;
+      const r=ratingsAndRanks(p.modes||{});
+      out.push({ pid, name:p.name||"?", country:countryFull(p.country||""), solo_rating:r.s_rating||"-", solo_wr:(r.s_wr==null?"-":`${r.s_wr}%`), solo_rank:r.s_rank, team_rating:r.t_rating||"-", team_wr:(r.t_wr==null?"-":`${r.t_wr}%`), team_rank:r.t_rank, team:t });
+    });
+  });
+  out.sort((a,b)=> (a.team-b.team) || a.name.localeCompare(b.name));
+  return {players:out, meta:{my_team:myTeam}};
+}
+function rowHTML(p,cls,showRanks){
+  const Sr=showRanks?(p.solo_rank??'-'):'', Tr=showRanks?(p.team_rank??'-'):'';
+  return `<div class="row ${cls}">
+    <div class="name" title="${p.name??''}">${p.name??''}</div>
+    <div>${p.country??''}</div>
+    <div>${p.solo_rating??'-'}</div><div>${p.solo_wr??'-'}</div><div>${Sr}</div>
+    <div>${p.team_rating??'-'}</div><div>${p.team_wr??'-'}</div><div>${Tr}</div>
+  </div>`;
+}
+function splitTeams(players,myTeam){ const a=[],e=[]; for(const p of players){ (p.team===myTeam?a:e).push(p);} a.sort((x,y)=>x.name.localeCompare(y.name)); e.sort((x,y)=>x.name.localeCompare(y.name)); return [a,e]; }
+function render(data){
+  const players=(data&&data.players)||[];
+  if (!players.length){ rowsEl.innerHTML=""; statusEl.textContent="waiting for match…"; return; }
+  const myTeam=(data&&data.meta&&data.meta.my_team)||1;
+  const [A,E]=splitTeams(players,myTeam);
+  rowsEl.innerHTML = A.map(p=>rowHTML(p,'ally',true)).join('') + `<div class="separator"><div>Vs</div></div>` + E.map(p=>rowHTML(p,'enemy',false)).join('');
+}
+
+/* Detect finished games (victory/defeat/won/loss or explicit flags) */
+function matchLooksFinished(raw){
+  if (!raw || typeof raw !== "object") return false;
+  if (raw.ongoing === true)  return false;
+  if (raw.ongoing === false) return true;
+
+  const st = (raw.status || raw.state || "").toString().toLowerCase();
+  if (st.includes("finished") || st.includes("complete") || st.includes("ended")) return true;
+
+  const players = [];
+  const teams = raw.teams || raw.players || [];
+  if (Array.isArray(teams)) {
+    if (teams.length && Array.isArray(teams[0])) {
+      for (const team of teams) for (const p of team) players.push(p);
+    } else {
+      for (const p of teams) players.push(p);
+    }
+  }
+  for (const p of players) {
+    const res = (p.result || p.outcome || p.result_text || p.match_result || "").toString().toLowerCase();
+    if (res.includes("win") || res.includes("loss") || res.includes("defe") || res.includes("vict")) return true;
+    if (typeof p.won === "boolean" || typeof p.victory === "boolean") return true;
+  }
+  return false;
+}
+
+/* Fetch ranks for many players at once using leaderboards (rm_solo & rm_team) */
+async function fetchRanksFor(profileIds){
+  const ids = [...new Set(profileIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const idParam = encodeURIComponent(ids.join(','));
+
+  const urls = [
+    `https://aoe4world.com/api/v0/leaderboards/rm_solo?profile_id=${idParam}`,
+    `https://aoe4world.com/api/v0/leaderboards/rm_team?profile_id=${idParam}`
+  ];
+  // helper to normalize any of the api’s shapes into an array
+  const getList = (j)=> {
+    if (!j) return [];
+    if (Array.isArray(j.players)) return j.players;
+    if (Array.isArray(j.entries)) return j.entries;
+    if (Array.isArray(j)) return j;
+    if (j.leaderboard && Array.isArray(j.leaderboard.players)) return j.leaderboard.players;
+    return [];
+  };
+
+  const [soloRes, teamRes] = await Promise.all(urls.map(u=>fetch(u, {cache:'no-store'}).catch(()=>null)));
+  const soloJ = soloRes && soloRes.ok ? await soloRes.json().catch(()=>null) : null;
+  const teamJ = teamRes && teamRes.ok ? await teamRes.json().catch(()=>null) : null;
+
+  const map = {};
+  const stash = (arr, key) => {
+    for (const p of getList(arr)) {
+      const pid = String(p.profile_id || p.id || p.profileId || "");
+      if (!pid) continue;
+      (map[pid] ||= {});
+      const rankRaw = p.rank_level || p.rankName || p.league_name || p.league || p.league_text;
+      let rank = null;
+      if (typeof rankRaw === "string") rank = rankRaw;
+      else if (Number.isInteger(rankRaw)) {
+        const names={0:"Unranked",1:"Bronze",2:"Silver",3:"Gold",4:"Platinum",5:"Diamond",6:"Conqueror"};
+        rank = names[rankRaw] || null;
+      }
+      map[pid][key] = {
+        rating: p.rating ?? p.mmr ?? p.elo ?? null,
+        rank: rank,
+        wr: p.win_rate ?? p.winrate ?? null
+      };
+    }
+  };
+  stash(soloJ, "solo");
+  stash(teamJ, "team");
+  return map;
+}
+
+// cache to avoid spamming leaderboards when the game hasn’t changed
+let lastGameId = null;
+let lastIdsKey = "";
+let lastRankMap = {};
+
+async function fetchLast(pid){
+  statusEl.textContent="updating…";
+  // use include_stats when available
+  const api = `https://aoe4world.com/api/v0/players/${encodeURIComponent(pid)}/games/last?include_stats=true`;
+  const r = await fetch(api, {cache:'no-store'});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  const raw = await r.json();
+
+  if (matchLooksFinished(raw)) {
+    rowsEl.innerHTML = "";
+    statusEl.textContent = "lobby — waiting for new match…";
+    lastGameId = null; // force refresh on next live game
+    return;
+  }
+
+  const base = simplify(raw, pid);
+  const ids = base.players.map(p=>p.pid).filter(Boolean);
+  const idsKey = ids.sort().join(',');
+
+  // only refetch ranks if the game or player set changed
+  if (raw.game_id !== lastGameId || idsKey !== lastIdsKey) {
+    lastRankMap = await fetchRanksFor(ids);
+    lastGameId = raw.game_id || null;
+    lastIdsKey = idsKey;
+  }
+
+  // merge ranks into players
+  base.players = base.players.map(p=>{
+    const m = lastRankMap[p.pid] || {};
+    const s = m.solo || {};
+    const t = m.team || {};
+    return {
+      ...p,
+      solo_rating: p.solo_rating !== "-" ? p.solo_rating : (s.rating ?? "-"),
+      solo_rank:   (s.rank ?? p.solo_rank ?? "unranked"),
+      team_rating: p.team_rating !== "-" ? p.team_rating : (t.rating ?? "-"),
+      team_rank:   (t.rank ?? p.team_rank ?? "unranked"),
+    };
+  });
+
+  render(base);
+  statusEl.textContent=`live (pid ${pid})`;
+}
+
+function parseSteamOrAoe4(input){
+  const s=(input||"").trim();
+  if(!s) return null;
+  const m1 = s.match(/aoe4world\.com\/players\/(\d+)/i);
+  if (m1) return m1[1];
+  if (/^\d{15,20}$/.test(s)) return {steam:s};
+  const m2 = s.match(/steamcommunity\.com\/profiles\/(\d{17})/i);
+  if (m2) return {steam:m2[1]};
+  return s;
+}
+async function steamToProfileId(steamOrPid){
+  if (typeof steamOrPid === "string" && /^\d{1,12}$/.test(steamOrPid)) return steamOrPid;
+  const steamid = (typeof steamOrPid==="object" && steamOrPid.steam) ? steamOrPid.steam : steamOrPid;
+  const r1 = await fetch(`https://aoe4world.com/api/v0/players/steam/${encodeURIComponent(steamid)}`, {cache:'no-store'});
+  if (r1.ok){ const j = await r1.json(); const pid = String(j.profile_id || j.id || ""); if (pid && /^\d+$/.test(pid)) return pid; }
+  const r2 = await fetch(`https://aoe4world.com/api/v0/players/search?query=${encodeURIComponent(steamid)}`, {cache:'no-store'});
+  if (r2.ok){ const j = await r2.json(); const row = Array.isArray(j) ? j[0] : (j.players && j.players[0]); const pid = row && String(row.profile_id || row.id || ""); if (pid && /^\d+$/.test(pid)) return pid; }
+  throw new Error("Could not resolve Steam → AoE4 profile_id");
+}
+
+(async function boot(){
+  let pid = localStorage.getItem(storageKey);
+  if (!pid && forcedPid) pid = forcedPid;
+
+  if (!pid){
+    // show setup UI
+    setupEl.style.display="flex";
+    document.getElementById('saveBtn').onclick = async ()=>{
+      const input = document.getElementById('inputId').value;
+      const err = document.getElementById('err');
+      err.style.display="none"; err.textContent="";
+      try{
+        const parsed   = parseSteamOrAoe4(input);
+        const resolved = typeof parsed==="object" ? await steamToProfileId(parsed) : parsed;
+        if (!/^\d+$/.test(resolved)) throw new Error("Invalid ID");
+        localStorage.setItem(storageKey, resolved);
+        setupEl.style.display="none";
+        await fetchLast(resolved); setInterval(()=>fetchLast(resolved), pollMs);
+      }catch(e){ err.textContent = e.message; err.style.display="block"; }
+    };
+    return;
+  }
+
+  // have pid from URL/storage → hide setup and start
+  setupEl.style.display = "none";
+  await fetchLast(pid);
+  setInterval(()=>fetchLast(pid), pollMs);
+})();
+</script>
+</body>
+</html>

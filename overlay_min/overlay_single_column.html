@@ -1,0 +1,182 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>AoE4 Overlay (Player Stats)</title>
+  <style>
+    :root{
+      --bg: rgba(40,40,48,.85);
+      --sep: rgba(255,255,255,.12);
+      --ally:#4da3ff;
+      --enemy:#ff6666;
+      --fs: 13px;
+      --pad: 4px;
+      --radius: 10px;
+      --w: 1120px;
+      --solo-bg: rgba(90,140,230,.18);
+      --team-bg: rgba(230,160,90,.18);
+      --group:#6eb8ff;
+      --hdr-dark: rgba(0,0,0,.38);
+    }
+
+    /* border-box everywhere + hide scrollbars */
+    * { box-sizing: border-box; scrollbar-width: none !important; -ms-overflow-style: none; }
+    *::-webkit-scrollbar { width:0 !important; height:0 !important; }
+
+    html, body {
+      margin:0; padding:0;
+      width:100%; height:100%;
+      background:transparent;
+      color:#eee;
+      font:var(--fs)/1.25 system-ui,Segoe UI,Arial,sans-serif;
+      overflow:hidden !important;
+    }
+
+    .wrap {
+      position:absolute; inset:0;
+      width:100%; height:100%;
+      display:grid; place-items:start end;
+    }
+
+    #status{position:absolute; top:4px; right:8px; font-size:11px; opacity:.8}
+
+    .panel{
+      width: calc(var(--w) - 2px);
+      max-width: calc(100% - 2px);
+      height: 100%;
+      max-height: 100%;
+      border: 1px solid var(--sep);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.04);
+      padding: 8px;
+      overflow:hidden !important;
+    }
+
+    .groupRow, .hdr, .row{
+      display:grid;
+      grid-template-columns: 1.6fr 1fr .9fr .8fr 1.1fr 1fr .8fr 1.1fr;
+      gap:0;
+    }
+
+    .groupRow{margin-bottom:4px}
+    .gCell{padding:4px 8px;color:var(--group);font-weight:800;text-align:center}
+    .gCell:first-child{grid-column:1 / span 2;text-align:left;color:#bbb;font-weight:700}
+    .gCell.solo{grid-column:3 / span 3}
+    .gCell.team{grid-column:6 / span 3}
+
+    .hdr, .row{border:1px solid var(--sep);border-radius:8px;overflow:hidden}
+    .hdr span{
+      font-weight:800;color:#111;
+      padding:4px 8px;border-right:1px solid var(--sep);white-space:nowrap
+    }
+    .hdr span:last-child{border-right:none}
+    .hdr span:nth-child(1), .hdr span:nth-child(2){ background: var(--hdr-dark); }
+    .hdr span:nth-child(3), .hdr span:nth-child(4), .hdr span:nth-child(5){ background: var(--solo-bg); }
+    .hdr span:nth-child(6), .hdr span:nth-child(7), .hdr span:nth-child(8){ background: var(--team-bg); }
+
+    .row{background:var(--bg);margin-top:4px}
+    .row>div{
+      padding:var(--pad);
+      border-right:1px solid var(--sep);
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+    }
+    .row>div:last-child{border-right:none}
+    .name{font-weight:800}
+    .ally .name{color:var(--ally)}
+    .enemy .name{color:var(--enemy)}
+
+    .row>div:nth-child(3), .row>div:nth-child(4), .row>div:nth-child(5){ background: var(--solo-bg); }
+    .row>div:nth-child(6), .row>div:nth-child(7), .row>div:nth-child(8){ background: var(--team-bg); }
+
+    .separator{margin-top:8px;color:#bbb;font-weight:700;opacity:.9;display:grid;grid-template-columns:1fr}
+    .separator div{padding:4px 4px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="status">connecting…</div>
+    <div class="panel">
+      <div class="groupRow">
+        <div class="gCell">(Name / Country)</div>
+        <div class="gCell solo">Solo</div>
+        <div class="gCell team">Team</div>
+      </div>
+      <div class="hdr">
+        <span>Name</span><span>Country</span>
+        <span>Elo</span><span>WR</span><span>Rank</span>
+        <span>Elo</span><span>WR</span><span>Rank</span>
+      </div>
+      <div id="rows"></div>
+    </div>
+  </div>
+
+  <script>
+    const urlPort = parseInt(new URLSearchParams(location.search).get('port') || '12346', 10);
+    const WS_PORT = Number.isFinite(urlPort) ? urlPort : 12346;
+
+    const statusEl = document.getElementById('status');
+    const rowsEl   = document.getElementById('rows');
+
+    function rowHTML(p, cls, showRanks){
+      const S  = (p.solo_rating ?? '-');
+      const Sw = (p.solo_wr ?? '-');
+      const Sr = showRanks ? (p.solo_rank ?? '-') : '';
+      const T  = (p.team_rating ?? '-');
+      const Tw = (p.team_wr ?? '-');
+      const Tr = showRanks ? (p.team_rank ?? '-') : '';
+      const C  = (p.country ?? '');
+      return `<div class="row ${cls}">
+        <div class="name" title="${p.name??''}">${p.name ?? ''}</div>
+        <div title="${C}">${C}</div>
+        <div>${S}</div><div>${Sw}</div><div>${Sr}</div>
+        <div>${T}</div><div>${Tw}</div><div>${Tr}</div>
+      </div>`;
+    }
+
+    function splitTeams(players, myTeam){
+      const a=[], e=[];
+      for(const p of players){ (p.team===myTeam ? a : e).push(p); }
+      a.sort((x,y)=>x.name.localeCompare(y.name));
+      e.sort((x,y)=>x.name.localeCompare(y.name));
+      return [a,e];
+    }
+
+    function render(payload){
+      const players = (payload && payload.players) || [];
+      if (players.length === 0) {
+        rowsEl.innerHTML = "";
+        statusEl.textContent = "waiting for match…";
+        return;
+      }
+      const myTeam  = (payload && payload.meta && payload.meta.my_team) || 1;
+      const [A,E] = splitTeams(players, myTeam);
+      const aRows = A.map(p=>rowHTML(p,'ally', true)).join('');
+      const eRows = E.map(p=>rowHTML(p,'enemy', false)).join('');
+      rowsEl.innerHTML = aRows + `<div class="separator"><div>Opponents</div></div>` + eRows;
+    }
+
+    function connect(){
+      const ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+      ws.onopen  = ()=> {
+        statusEl.textContent = `connected (port ${WS_PORT})`;
+        ws.send(JSON.stringify({type:'refresh'}));
+      };
+      ws.onclose = ()=> {
+        statusEl.textContent = `reconnecting… (port ${WS_PORT})`;
+        setTimeout(connect, 900);
+      };
+      ws.onerror = ()=> {
+        statusEl.textContent = `error (port ${WS_PORT})`;
+        ws.close();
+      };
+      ws.onmessage = (e)=>{
+        try{
+          const m = JSON.parse(e.data);
+          if(m.type==='player_data' && m.data) render(m.data);
+        }catch(err){ console.error(err); }
+      };
+    }
+    connect();
+  </script>
+</body>
+</html>

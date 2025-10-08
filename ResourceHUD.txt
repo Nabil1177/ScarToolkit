@@ -1,0 +1,354 @@
+-- ==============================================================
+-- ResourceHUD — Allies Left, Opponents Right, True Player Colors,
+--                Compact layout, Resource Icons, Score column
+-- ==============================================================
+
+local HUD = {}   -- DataContext table
+
+-- ---------- layout knobs ----------
+local COMPACT        = true
+local NAME_COL_W     = COMPACT and 160 or 150
+local SCORE_COL_W    = COMPACT and 48  or 56
+local ROW_HEIGHT     = COMPACT and 46  or 52
+local ICON_SIZE      = COMPACT and 16  or 18
+local NAME_FONT      = COMPACT and 10  or 11
+local STAT_FONT      = COMPACT and 9   or 10
+local RES_FONT       = COMPACT and 10  or 11
+local PANEL_WIDTH_1C = COMPACT and 410 or 440
+local PANEL_WIDTH_2C = COMPACT and 860 or 900
+
+-- ---------- ordering (same idea as ScoreHUD) ----------
+local function build_order()
+  local n  = World_GetPlayerCount() or 0
+  local lp = Game_GetLocalPlayer()
+  if not lp or n <= 0 then return {}, {} end
+
+  local allies, enemies = {}, {}
+  for slot = 1, n do
+    local p = World_GetPlayerAt(slot)
+    if p then
+      local rel = Player_ObserveRelationship(lp, p)   -- observe from local player
+      if (p == lp) or (rel == R_ALLY) then
+        table.insert(allies,  {slot=slot, p=p})
+      else
+        table.insert(enemies, {slot=slot, p=p})
+      end
+    end
+  end
+  table.sort(allies,  function(a,b) return a.slot < b.slot end)
+  table.sort(enemies, function(a,b) return a.slot < b.slot end)
+  return allies, enemies
+end
+-- (Derived from your working ScoreHUD’s approach.)
+
+-- ---------- total score (uses same backing as ScoreHUD) ----------
+local function total_for(entry)
+  if entry and type(entry.score) == "number" and entry.score > 0 then
+    return entry.score
+  end
+  if _score and _score.data_context and entry then
+    local ctx = Score_GetPlayerDataContext(entry.index)
+    if ctx and ctx.score then
+      return math.floor(
+        (ctx.score.military   or 0) +
+        (ctx.score.economy    or 0) +
+        (ctx.score.society    or 0) +
+        (ctx.score.technology or 0)
+      )
+    end
+  end
+  return 0
+end
+-- (Same summation logic your ScoreHUD uses.)
+
+-- Proper WPF color hex (#AARRGGBB)
+local function hexA(a, c) return string.format("#%02X%02X%02X%02X", a, c.r, c.g, c.b) end
+local function hex(c)     return string.format("#%02X%02X%02X",      c.r, c.g, c.b) end
+
+-- ---------- SHOW ----------
+function ShowPlayerResources()
+  -- NEW: clear any previous update rule and panel so re-show works after hide
+  pcall(function() if Rule_Remove and UpdateResourceHUD then Rule_Remove(UpdateResourceHUD) end end)
+  if UI_Remove then UI_Remove("TestName") end
+
+  local allies, enemies = build_order()
+  local na, ne = #allies, #enemies
+  if (na + ne) <= 1 then return end
+
+  local twoCols = (na > 4) or (ne > 4) or ((na + ne) > 4)
+  local uiWidth = twoCols and PANEL_WIDTH_2C or PANEL_WIDTH_1C
+
+  local xaml = string.format([[
+<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        HorizontalAlignment="Right" VerticalAlignment="Top"
+        Margin="0,16,16,0" CornerRadius="12"
+        Background="#99000000" BorderBrush="#1AFFFFFF" BorderThickness="1"
+        Width="%s">
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <!-- Header -->
+    <Border Grid.Row="0" Background="#0D87CEEB" CornerRadius="12,12,0,0" Padding="10,6">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="%d"/>
+        </Grid.ColumnDefinitions>
+        <TextBlock Grid.Column="0"
+                   Text="PLAYER RESOURCES"
+                   Foreground="#87CEEB" FontSize="12" FontWeight="Bold"
+                   HorizontalAlignment="Center"/>
+        <!-- small 'SCORE' title above right column -->
+        <TextBlock Grid.Column="1"
+                   Text="SCORE"
+                   Foreground="#B0FFFFFF" FontSize="10" FontWeight="SemiBold"
+                   HorizontalAlignment="Right" Margin="0,0,4,0"/>
+      </Grid>
+    </Border>]], uiWidth, SCORE_COL_W)
+
+  if twoCols then
+    xaml = xaml .. [[
+    <Grid Grid.Row="1" Margin="8,6,8,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="8"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <!-- Allies (Left) -->
+      <StackPanel Grid.Column="0" Orientation="Vertical">]]
+    for i = 1, na do xaml = xaml .. generateRowXaml("A"..i) end
+    xaml = xaml .. [[</StackPanel>
+
+      <Rectangle Grid.Column="1" Width="1" Fill="#1AFFFFFF" Margin="0,4"/>
+
+      <!-- Opponents (Right) -->
+      <StackPanel Grid.Column="2" Orientation="Vertical">]]
+    for j = 1, ne do xaml = xaml .. generateRowXaml("E"..j) end
+    xaml = xaml .. [[</StackPanel>
+    </Grid>]]
+  else
+    -- Single column: allies first, then enemies (still left-to-right concept)
+    xaml = xaml .. [[
+    <StackPanel Grid.Row="1" Orientation="Vertical" Margin="8,6,8,8">]]
+    for i = 1, na do xaml = xaml .. generateRowXaml("A"..i) end
+    for j = 1, ne do xaml = xaml .. generateRowXaml("E"..j) end
+    xaml = xaml .. [[</StackPanel>]]
+  end
+
+  xaml = xaml .. [[
+  </Grid>
+</Border>]]
+
+  UI_AddChild("ScarDefault", "XamlPresenter", "TestName", {
+    IsHitTestVisible = false,
+    Xaml = xaml,
+    DataContext = UI_CreateDataContext(HUD)
+  })
+
+  -- (Re)start updater
+  Rule_AddInterval(UpdateResourceHUD, 1)
+end
+
+-- ---------- one player row XAML ----------
+function generateRowXaml(k)
+  return string.format([[
+    <Border CornerRadius="6" Margin="0,0,0,3"
+            Background="{Binding [%s_Background]}"
+            BorderBrush="{Binding [%s_BorderColor]}"
+            BorderThickness="1.5" Height="%d" Opacity="0.92">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="24"/>
+          <ColumnDefinition Width="%d"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="%d"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- player number -->
+        <Border Grid.Column="0" Background="{Binding [%s_HeaderBg]}" CornerRadius="6,0,0,6">
+          <TextBlock Text="{Binding [%s_Num]}" Foreground="#FFFFFF" FontSize="12" FontWeight="Bold"
+                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+
+        <!-- name + status -->
+        <Grid Grid.Column="1" Margin="6,0,0,0"
+              ToolTipService.ToolTip="{Binding [%s_NameFull]}"
+              ToolTipService.ShowDuration="60000" ToolTipService.InitialShowDelay="250">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,3,0,0">
+            <TextBlock Text="{Binding [%s_Name]}" Foreground="#FFFFFF" FontSize="%d" FontWeight="Bold"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            <Border Background="{Binding [%s_StatusBg]}" CornerRadius="6" Padding="5,0"
+                    Margin="6,0,0,0" VerticalAlignment="Center" Opacity="0.85">
+              <TextBlock Text="{Binding [%s_Status]}" Foreground="#FFFFFF" FontSize="8" FontWeight="Bold"/>
+            </Border>
+          </StackPanel>
+
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,1,0,2">
+            <Image Source="pack://application:,,,/WPFGUI;component/icons/races/common/units/villager.png"
+                   Width="14" Height="14" Margin="0,0,3,0" Opacity="0.7"/>
+            <TextBlock Text="{Binding [%s_Villager]}" Foreground="#87CEEB" FontSize="%d" FontWeight="Bold"
+                       Margin="0,0,8,0"/>
+
+            <Image Source="pack://application:,,,/WPFGUI;component/icons/races/common/buildings/barracks.png"
+                   Width="14" Height="14" Margin="0,0,3,0" Opacity="0.7"/>
+            <TextBlock Text="{Binding [%s_Army]}" Foreground="#FF6B6B" FontSize="%d" FontWeight="Bold"
+                       Margin="0,0,8,0"/>
+
+            <Image Source="pack://application:,,,/WPFGUI;component/icons/resources/resource_popcap_icon.png"
+                   Width="14" Height="14" Margin="0,0,3,0" Opacity="0.7"/>
+            <TextBlock Text="{Binding [%s_Pop]}" Foreground="#FFFFFF" FontSize="%d"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- resources (icons + values) -->
+        <Grid Grid.Column="2" Margin="4,0,4,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+
+          <!-- Food -->
+          <StackPanel Grid.Column="0" Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Image Source="pack://application:,,,/WPFGUI;component/icons/resources/resource_food_icon.png"
+                   Width="%d" Height="%d" Margin="0,0,0,1" Opacity="0.85"/>
+            <TextBlock Text="{Binding [%s_Food]}" Foreground="#FFD700" FontSize="%d" FontWeight="Bold"
+                       HorizontalAlignment="Center"/>
+          </StackPanel>
+
+          <!-- Wood -->
+          <StackPanel Grid.Column="1" Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Image Source="pack://application:,,,/WPFGUI;component/icons/resources/resource_wood_icon.png"
+                   Width="%d" Height="%d" Margin="0,0,0,1" Opacity="0.85"/>
+            <TextBlock Text="{Binding [%s_Wood]}" Foreground="#8B4513" FontSize="%d" FontWeight="Bold"
+                       HorizontalAlignment="Center"/>
+          </StackPanel>
+
+          <!-- Gold -->
+          <StackPanel Grid.Column="2" Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Image Source="pack://application:,,,/WPFGUI;component/icons/resources/resource_gold_icon.png"
+                   Width="%d" Height="%d" Margin="0,0,0,1" Opacity="0.85"/>
+            <TextBlock Text="{Binding [%s_Gold]}" Foreground="#FFD700" FontSize="%d" FontWeight="Bold"
+                       HorizontalAlignment="Center"/>
+          </StackPanel>
+
+          <!-- Stone -->
+          <StackPanel Grid.Column="3" Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Image Source="pack://application:,,,/WPFGUI;component/icons/resources/resource_stone_icon.png"
+                   Width="%d" Height="%d" Margin="0,0,0,1" Opacity="0.85"/>
+            <TextBlock Text="{Binding [%s_Stone]}" Foreground="#808080" FontSize="%d" FontWeight="Bold"
+                       HorizontalAlignment="Center"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- score -->
+        <Border Grid.Column="3" Background="#12000000" CornerRadius="0,6,6,0" Padding="0,0,4,0">
+          <TextBlock Text="{Binding [%s_Score]}" Foreground="{Binding [%s_Accent]}"
+                     FontSize="%d" FontWeight="Bold"
+                     HorizontalAlignment="Right" VerticalAlignment="Center"/>
+        </Border>
+      </Grid>
+    </Border>]],
+    k, k, ROW_HEIGHT, NAME_COL_W, SCORE_COL_W,
+    k, k, k,
+    k, NAME_FONT, k, k,
+    k, STAT_FONT, k, STAT_FONT, k, STAT_FONT,
+    ICON_SIZE, ICON_SIZE, k, RES_FONT,
+    ICON_SIZE, ICON_SIZE, k, RES_FONT,
+    ICON_SIZE, ICON_SIZE, k, RES_FONT,
+    ICON_SIZE, ICON_SIZE, k, RES_FONT,
+    k, k, RES_FONT)
+end
+
+-- ---------- UPDATE ----------
+function UpdateResourceHUD()
+  local lp = Game_GetLocalPlayer()
+  if not lp then return end
+
+  local allies, enemies = build_order()
+
+  -- helper to fill a block (left = allies with "A", right = enemies with "E")
+  local function fill(block, pref)
+    for i, rec in ipairs(block or {}) do
+      local p     = rec.p
+      local entry = Core_GetPlayersTableEntry(p)
+      local total = total_for(entry)
+
+      local food   = math.floor(Player_GetResource(p, RT_Food))
+      local wood   = math.floor(Player_GetResource(p, RT_Wood))
+      local stone  = math.floor(Player_GetResource(p, RT_Stone))
+      local gold   = math.floor(Player_GetResource(p, RT_Gold))
+      local vill   = Player_GetEntityCountByUnitType(p, "Worker")
+      local cav    = Player_GetEntityCountByUnitType(p, "cavalry")
+      local inf    = Player_GetEntityCountByUnitType(p, "infantry")
+      local army   = cav + inf
+      local pop    = Player_GetCurrentPopulation(p, CT_Personnel)
+      local popMax = Player_GetCurrentPopulationCap(p, CT_Personnel)
+      local popStr = string.format("%d/%d", pop, popMax)
+
+      local disp   = entry and Player_GetDisplayName(entry.id)
+      local nameFull = (disp and disp.LocString) or Loc_ToAnsi(Player_GetDisplayName(p)) or ("Player "..tostring(rec.slot))
+      local name   = nameFull
+      local maxName = COMPACT and 18 or 16
+      if #name > maxName then name = string.sub(name, 1, maxName - 3) .. "..." end
+
+      local rel = Player_ObserveRelationship(lp, p)
+      local status = (p == lp) and "YOU" or ((rel == R_ALLY) and "ALLY" or "OPPONENT")
+
+      local c   = Player_GetUIColour(p)
+      local k   = pref .. i
+
+      HUD[k.."_Num"]      = tostring(rec.slot)
+      HUD[k.."_Name"]     = name
+      HUD[k.."_NameFull"] = nameFull
+      HUD[k.."_Status"]   = status
+
+      HUD[k.."_Food"]  = (food  > 9999) and string.format("%.1fk", food/1000)  or tostring(food)
+      HUD[k.."_Wood"]  = (wood  > 9999) and string.format("%.1fk", wood/1000)  or tostring(wood)
+      HUD[k.."_Gold"]  = (gold  > 9999) and string.format("%.1fk", gold/1000)  or tostring(gold)
+      HUD[k.."_Stone"] = (stone > 9999) and string.format("%.1fk", stone/1000) or tostring(stone)
+
+      HUD[k.."_Villager"] = tostring(vill)
+      HUD[k.."_Army"]     = tostring(army)
+      HUD[k.."_Pop"]      = popStr
+      HUD[k.."_Score"]    = tostring(total)
+
+      local header = hex(c)                    -- solid cap colour
+      local accent = hex(c)                    -- text accent
+      local border = hexA(0x99, c)             -- 60% border
+      local stBG   = hexA(0x66, c)             -- 40% badge
+
+      HUD[k.."_HeaderBg"]  = header
+      HUD[k.."_Accent"]    = accent
+      HUD[k.."_BorderColor"]= border
+      HUD[k.."_StatusBg"]  = stBG
+      HUD[k.."_Background"]= "#0AFFFFFF"       -- subtle body fill
+    end
+  end
+
+  fill(allies,  "A")
+  fill(enemies, "E")
+
+  UI_SetDataContext("TestName", HUD)
+end
+
+-- ---------- PUBLIC TOGGLES (optional; safe to keep) ----------
+function DoShowResourceHUD() ShowPlayerResources() end
+function DoHideResourceHUD()
+  pcall(function() if Rule_Remove and UpdateResourceHUD then Rule_Remove(UpdateResourceHUD) end end)
+  if UI_Remove then UI_Remove("TestName") end
+end
+
+-- Keep your existing behavior: on reinjection, auto-show once
+Rule_AddOneShot(ShowPlayerResources, 1)
