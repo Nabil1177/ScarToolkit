@@ -19,7 +19,6 @@
 #include "OverlayWebView.h"
 
 
-
 // --- UI helpers for overlay row ---
 static void HelpMarker(const char* text) {
     ImGui::SameLine();
@@ -1094,7 +1093,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     // Create application window
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"AoE4 Injector", nullptr };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Age of Empires IV Injector", WS_OVERLAPPEDWINDOW, 100, 100, 500, 350, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"AoE IV ScarToolkit", WS_OVERLAPPEDWINDOW, 100, 100, 500, 350, nullptr, nullptr, wc.hInstance, nullptr);
 
     // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd)) {

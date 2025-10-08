@@ -112,6 +112,13 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>REM Copy content files to the output (x64\Debug or x64\Release)
+xcopy /Y /D /I  "$(ProjectDir)overlay.html"      "$(OutDir)"
+xcopy /Y /D /I  "$(ProjectDir)ResourceHUD.txt"   "$(OutDir)"
+xcopy /Y /D /I  "$(ProjectDir)ScoreHUD.lua"      "$(OutDir)"
+</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
